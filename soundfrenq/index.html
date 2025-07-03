@@ -45,7 +45,6 @@
         const recordSeconds = 3; // время записи, секунд
 
         let currentSource = null;
-
         // Предположим, recordedChunks уже заполнен
         playButton.addEventListener('click', () => {
             if (recordedChunks.length === 0) {
@@ -183,7 +182,6 @@
       
         // === Отправка на сервер ===
         async function sendToServer(wavBase64) {
-            console.log(wavBase64);
             statusText.textContent = "Отправка данных...";
             try {
                 const response = await fetch("https://functions.yandexcloud.net/d4e44n05pmuailluel6s?integration=raw",  {
@@ -195,11 +193,10 @@
                     body: wavBase64                    
                 });
                 const rt = await response.text();
-                console.log("result: " + rt);
                 var result;
                 try {
                     const data = JSON.parse(rt);
-                    console.log('Преобразованные данные:', data);
+                    //console.log('Преобразованные данные:', data);
                     result = data;
                 } catch (e) {
                     console.error('Не удалось распарсить JSON:', e);
@@ -297,7 +294,7 @@
                         const audioBuffer = await audioChunksToBuffer(recordedChunks);
                         statusText.textContent = "Обработка данных...";
                         const base64WAV = await processAudioBuffer(audioBuffer);
-                        console.log(base64WAV); // Теперь можно отправлять на сервер
+                        //console.log(base64WAV); // Теперь можно отправлять на сервер
                         sendToServer(base64WAV);
                         playButton.disabled=false;
                     } catch (error) {
