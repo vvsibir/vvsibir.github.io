@@ -42,7 +42,7 @@
         // Константы
         const sampleRate = 11025; // Частота дискретизации
         
-        const recordSeconds = 5; // время записи, секунд
+        const recordSeconds = 3; // время записи, секунд
 
         let currentSource = null;
 
@@ -85,102 +85,102 @@
             */
         });
 
-        // === Формирование WAV из данных ===
-        function floatTo16BitPCM(input) {
-            const buffer = new ArrayBuffer(input.length * 2);
+        function floatTo16BitPCM(float32Array) {
+            const buffer = new ArrayBuffer(float32Array.length * 2);
             const view = new DataView(buffer);
-            for (let i = 0; i < input.length; i++) {
-                const s = Math.max(-1, Math.min(1, input[i]));
-                const val = s < 0 ? s * 32768 : s * 32767;
+
+            for (let i = 0; i < float32Array.length; i++) {
+                const s = Math.max(-1, Math.min(1, float32Array[i]));
+                const val = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 view.setInt16(i * 2, val, true);
             }
+
             return view;
-        }
+        }        
 
-        function writeWAVBuffer(buffer, sampleRate) {
-            const headerSize = 44;
-            const wavBuffer = new ArrayBuffer(headerSize + buffer.byteLength);
-            const view = new DataView(wavBuffer);
+        function writeWAVHeader(view, channels, sampleRate, bitsPerSample, dataSize) {
+            const bytesPerSample = bitsPerSample / 8;
+            const blockAlign = channels * bytesPerSample;
+            const byteRate = sampleRate * blockAlign;
 
-            function writeString(view, offset, str) {
+            let offset = 0;
+
+            function writeString(str) {
                 for (let i = 0; i < str.length; i++) {
                     view.setUint8(offset + i, str.charCodeAt(i));
                 }
+                offset += str.length;
             }
 
-            writeString(view, 0, 'RIFF');
-            view.setUint32(4, 36 + buffer.byteLength, true);
-            writeString(view, 8, 'WAVE');
-            writeString(view, 12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true); // PCM
-            view.setUint16(22, 1, true); // Моно
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(view, 36, 'data');
-            view.setUint32(40, buffer.byteLength, true);
+            // RIFF chunk
+            writeString('RIFF');
+            view.setUint32(offset, 36 + dataSize, true); offset += 4;
+            writeString('WAVE');
 
-            const pcmData = new Uint8Array(buffer);
-            for (let i = 0; i < pcmData.length; i++) {
-                view.setUint8(44 + i, pcmData[i]);
+            // fmt subchunk
+            writeString('fmt ');
+            view.setUint32(offset, 16, true); offset += 4;
+            view.setUint16(offset, 1, true); offset += 2; // PCM format
+            view.setUint16(offset, channels, true); offset += 2;
+            view.setUint32(offset, sampleRate, true); offset += 4;
+            view.setUint32(offset, byteRate, true); offset += 4;
+            view.setUint16(offset, blockAlign, true); offset += 2;
+            view.setUint16(offset, bitsPerSample, true); offset += 2;
+
+            // data subchunk
+            writeString('data');
+            view.setUint32(offset, dataSize, true); offset += 4;
+        }
+
+        function writeWAVBuffer(pcmData, sampleRate) {
+            const dataSize = pcmData.byteLength;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            writeWAVHeader(view, 1, sampleRate, 16, dataSize);
+
+            const pcmView = new Int16Array(buffer, 44, pcmData.byteLength / 2);
+            for (let i = 0; i < pcmView.length; i++) {
+                pcmView[i] = pcmData.getInt16(i * 2, true);
             }
 
             return view;
-        }
-
-        // === Обработка аудио после записи ===
+        }  
+        /**
+         * Асинхронно конвертирует AudioBuffer в WAV и в Base64
+         * @param {AudioBuffer} audioBuffer - аудио-буфер из MediaRecorder
+         * @returns {Promise<string>} - Base64 строка в формате data URL
+         */
         async function processAudioBuffer(audioBuffer) {
             if (!audioBuffer || audioBuffer.numberOfChannels === 0) {
-                console.error("audioBuffer пустой!");
-                return;
+                throw new Error("AudioBuffer пустой или некорректный");
             }
 
-            const sampleRate = audioBuffer.sampleRate;
+            // Получаем данные первого канала
+            const channelData = audioBuffer.getChannelData(0);
 
-            // Создаём OfflineAudioContext
-            const offlineCtx = new OfflineAudioContext(
-                1,                      // 1 канал (моно)
-                audioBuffer.length,   // длина буфера
-                sampleRate            // частота дискретизации
-            );
+            // Преобразуем Float32 в 16-bit PCM
+            const wavData = floatTo16BitPCM(channelData);
 
-            // Создаём источник из оригинального аудиобуфера
-            const source = offlineCtx.createBufferSource();
-            source.buffer = audioBuffer;
+            // Создаём буфер с WAV заголовком
+            const wavBuffer = writeWAVBuffer(wavData, audioBuffer.sampleRate);
 
-            // Подключаем к выходу
-            source.connect(offlineCtx.destination);
+            // Создаём Blob из буфера
+            const blob = new Blob([wavBuffer], { type: 'audio/wav' });
 
-            // ⚠️ Запускаем источник ДО рендеринга!
-            source.start();
+            // Конвертируем Blob в Base64 через FileReader
+            const base64String = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]); // Убираем префикс
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(blob); // Читаем как Data URL
+            });
 
-            try {
-                // 🟢 Теперь вызываем startRendering()
-                const renderedBuffer = await offlineCtx.startRendering();
-
-                // Получаем данные
-                const rawData = renderedBuffer.getChannelData(0);
-                const pcmData = floatTo16BitPCM(rawData);
-                const wavBuffer = writeWAVBuffer(pcmData, sampleRate);
-
-                // Base64
-                const arrayBuffer = wavBuffer.buffer;
-                const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
-
-                const base64WAV = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result.split(',')[1]);
-                    reader.onerror = error => reject(error);
-                    reader.readAsDataURL(blob);
-                });
-
-                sendToServer(base64WAV);
-            } catch (err) {
-                console.error('Ошибка при рендеринге:', err);
-            }
+            //return `data:audio/wav;base64,${base64String}`;
+            //return `${base64String}`;
+            return base64String;
         }
+      
         // === Отправка на сервер ===
         async function sendToServer(wavBase64) {
             console.log(wavBase64);
@@ -256,6 +256,19 @@
                 }
             });
         }
+        function audioChunksToBuffer(recordedChunks) {
+            return new Promise((resolve) => {
+                const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+                const fileReader = new FileReader();
+                fileReader.onload = function() {
+                    const audioContext = new AudioContext();
+                    audioContext.decodeAudioData(fileReader.result, function(buffer) {
+                        resolve(buffer); // buffer готов к использованию
+                    });
+                };
+                fileReader.readAsArrayBuffer(blob);
+            });
+        }
         // === Запуск записи после клика ===
         recordButton.addEventListener('click', async () => {
             if (!audioContext) {
@@ -277,23 +290,19 @@
                     }
                 };
 
-                mediaRecorder.onstop = () => {
-                    statusText.textContent = "Обработка данных...";
-                    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const arrayBuffer = reader.result;
-
-                        audioContext.decodeAudioData(arrayBuffer, decodedBuffer => {
-                            processAudioBuffer(decodedBuffer);
-                        }, err => {
-                            console.error("Ошибка декодирования:", err);
-                            statusText.textContent = "Ошибка обработки звука.";
-                            recordButton.disabled = false;
-                        });
-                    };
-                    reader.readAsArrayBuffer(blob);
-                    playButton.disabled = false;
+                mediaRecorder.onstop = async () => {
+                    statusText.textContent = "Чтение данных...";
+                    
+                    try {
+                        const audioBuffer = await audioChunksToBuffer(recordedChunks);
+                        statusText.textContent = "Обработка данных...";
+                        const base64WAV = await processAudioBuffer(audioBuffer);
+                        console.log(base64WAV); // Теперь можно отправлять на сервер
+                        sendToServer(base64WAV);
+                    } catch (error) {
+                        console.error("Ошибка при обработке аудио:", error);
+                        statusText.textContent = "Ошибка при обработке";
+                    }
                 };
                 mediaRecorder.start();
                 setTimeout(() => {
