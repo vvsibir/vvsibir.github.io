@@ -299,6 +299,7 @@
                         const base64WAV = await processAudioBuffer(audioBuffer);
                         console.log(base64WAV); // Теперь можно отправлять на сервер
                         sendToServer(base64WAV);
+                        playButton.disabled=false;
                     } catch (error) {
                         console.error("Ошибка при обработке аудио:", error);
                         statusText.textContent = "Ошибка при обработке";
